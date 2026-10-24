@@ -1,16 +1,35 @@
 package tls
 
 import (
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/zmap/zcrypto/internal/testenv"
 )
 
+// dialBadSSL connects to a badssl.com test server and skips the test when the
+// server cannot be reached or resets the connection.
+func dialBadSSL(t *testing.T, addr string, config *Config) *Conn {
+	t.Helper()
+	conn, err := Dial("tcp", addr, config)
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) {
+		t.Skipf("skipping test: %s is unreachable: %v", addr, err)
+	}
+	require.NoError(t, err)
+	return conn
+}
+
 func TestTLSVersions(t *testing.T) {
+	testenv.MustHaveExternalNetwork(t)
+
 	tests := []struct {
 		version uint16
 		addr    string
@@ -30,9 +49,7 @@ func TestTLSVersions(t *testing.T) {
 				InsecureSkipVerify: true,
 				MaxVersion:         test.version,
 			}
-			conn, err := Dial("tcp", test.addr, &config)
-
-			require.NoError(t, err)
+			conn := dialBadSSL(t, test.addr, &config)
 			defer conn.Close()
 
 			if log := conn.handshakeLog; assert.NotNil(t, log) {
@@ -43,6 +60,8 @@ func TestTLSVersions(t *testing.T) {
 }
 
 func TestCipherSuitesBadSSL(t *testing.T) {
+	testenv.MustHaveExternalNetwork(t)
+
 	tests := []struct {
 		cipherSuite uint16
 		addr        string
@@ -109,9 +128,7 @@ func TestCipherSuitesBadSSL(t *testing.T) {
 				InsecureSkipVerify: true,
 				CipherSuites:       []uint16{test.cipherSuite},
 			}
-			conn, err := Dial("tcp", test.addr, &config)
-
-			require.NoError(t, err)
+			conn := dialBadSSL(t, test.addr, &config)
 			defer conn.Close()
 
 			if log := conn.handshakeLog; assert.NotNil(t, log) {
